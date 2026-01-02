@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run ingest (module)",
+      "type": "python",
+      "request": "launch",
+      "module": "daylight.ingest",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env"
+    },
+    {
+      "name": "Run backfill (module)",
+      "type": "python",
+      "request": "launch",
+      "module": "daylight.backfill",
+      "justMyCode": true,
+      "envFile": "${workspaceFolder}/.env"
+    }
+  ]
+}

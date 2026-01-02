@@ -1,0 +1,35 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "venv: create",
+      "type": "shell",
+      "command": "python -m venv .venv",
+      "problemMatcher": []
+    },
+    {
+      "label": "deps: install",
+      "type": "shell",
+      "command": ".venv/bin/python -m pip install -r requirements.txt",
+      "problemMatcher": []
+    },
+    {
+      "label": "test: pytest",
+      "type": "shell",
+      "command": ".venv/bin/python -m pytest",
+      "problemMatcher": []
+    },
+    {
+      "label": "lint: flake8",
+      "type": "shell",
+      "command": ".venv/bin/python -m flake8",
+      "problemMatcher": []
+    },
+    {
+      "label": "typecheck: mypy",
+      "type": "shell",
+      "command": ".venv/bin/python -m mypy",
+      "problemMatcher": []
+    }
+  ]
+}

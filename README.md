@@ -1,0 +1,24 @@
+# Cloudflare Audit Logs Pipeline (Home Assignment)
+
+- Polls Cloudflare Audit Logs API continuously (every N seconds).
+- Ingests events with checkpointing to avoid gaps across restarts.
+- Writes near-real-time events to an analytics DB (PostgreSQL + TimescaleDB).
+- Writes batch Parquet files to S3-compatible storage (e.g., MinIO).
+- Keeps a minimal, debuggable Python ingestion loop.
+- Preserves raw event payloads for flexible querying.
+
+## Data flow (high level)
+1) Poll Cloudflare Audit Logs API for new events since last checkpoint.
+2) Persist events into PostgreSQL/TimescaleDB for fast queries.
+3) Persist the same events to S3-compatible storage as Parquet partitions.
+
+## Configuration
+- Copy `config.example.env` to `.env` and set required values.
+- Required: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `POLL_INTERVAL_SECONDS`, `PG_*`, `S3_*`.
+- Optional: `CLOUDFLARE_PER_PAGE`, `CLOUDFLARE_DIRECTION`, `CLOUDFLARE_HIDE_USER_LOGS`, `CLOUDFLARE_SINCE_SAFETY_LAG_SECONDS`, `CLOUDFLARE_REQUEST_TIMEOUT_SECONDS`, `INITIAL_CHECKPOINT`.
+- Secrets: keep tokens in `.env` (gitignored) for dev; use a secrets manager, Docker secrets, or systemd credentials in production.
+
+## How to run locally
+1) Copy `config.example.env` to `.env` and fill in credentials.
+2) Start local services (PostgreSQL/TimescaleDB + MinIO) via your preferred setup.
+3) Run the Python ingestor (e.g., `python -m ingestor`).
