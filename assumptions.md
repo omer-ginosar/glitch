@@ -9,3 +9,4 @@
 - Minimal security: credentials are passed via environment variables.
 - Error handling is basic (log and retry on next poll).
 - Parquet files are written per-hour; no compaction or catalog.
+- TimescaleDB is optional; retention/compression policies may be enabled in DB.

@@ -195,7 +195,7 @@ Partitioning: year/month/day/hour for optimal query performance
 - Time window: since = checkpoint - safety lag, before = now, direction = asc
 - Pagination: request page=1..N; stop when result count < per_page (no result_info returned)
 - Ingest: map fields, store raw_event JSONB, insert with ON CONFLICT DO NOTHING
-- Commit: advance checkpoint to max event timestamp only after all sinks succeed
+- Commit: advance checkpoint to max event timestamp after processing events (even if inserts are deduped)
 - Failure: do not advance checkpoint on API or sink errors; retry on next poll
 
 ## State and checkpointing
@@ -208,3 +208,7 @@ Partitioning: year/month/day/hour for optimal query performance
 - PostgreSQL primary key on (timestamp, event_id) prevents duplicates.
 - If a poll window overlaps, duplicate inserts are ignored or upserted.
 - Parquet writes are partitioned by time; files are written once per window.
+
+## Retention and compression (optional)
+- TimescaleDB retention: keep 90 days of data (drop older chunks).
+- TimescaleDB compression: compress chunks older than 30 days.
