@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
 import logging
@@ -42,37 +41,19 @@ PARQUET_SCHEMA = pa.schema(
 )
 
 
-@dataclass(frozen=True)
-class Partition:
-    year: int
-    month: int
-    day: int
-    hour: int
-
-
 def _normalize_timestamp(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)
     return value.astimezone(timezone.utc)
 
 
-def partition_for_timestamp(value: datetime) -> Partition:
-    normalized = _normalize_timestamp(value)
-    return Partition(
-        year=normalized.year,
-        month=normalized.month,
-        day=normalized.day,
-        hour=normalized.hour,
-    )
-
-
 def partition_path(value: datetime, *, prefix: str = "") -> str:
-    partition = partition_for_timestamp(value)
+    normalized = _normalize_timestamp(value)
     path = (
-        f"year={partition.year:04d}/"
-        f"month={partition.month:02d}/"
-        f"day={partition.day:02d}/"
-        f"hour={partition.hour:02d}"
+        f"year={normalized.year:04d}/"
+        f"month={normalized.month:02d}/"
+        f"day={normalized.day:02d}/"
+        f"hour={normalized.hour:02d}"
     )
     if prefix:
         prefix = prefix.strip("/")
