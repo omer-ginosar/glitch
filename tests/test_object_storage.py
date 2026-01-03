@@ -3,8 +3,8 @@ from datetime import datetime, timezone
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from daylight.models import AuditLogRecord
-from daylight.object_storage import (
+from glitch.models import AuditLogRecord
+from glitch.object_storage import (
     ObjectStorageClient,
     partition_path,
     records_to_parquet_bytes,

@@ -1,8 +1,8 @@
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
-from daylight.db import insert_audit_logs, load_checkpoint, save_checkpoint
-from daylight.models import AuditLogRecord
+from glitch.db import insert_audit_logs, load_checkpoint, save_checkpoint
+from glitch.models import AuditLogRecord
 
 
 class _Cursor:
@@ -59,7 +59,7 @@ def test_insert_audit_logs_calls_execute_values(monkeypatch):
         called["sql"] = sql
         called["values"] = list(values)
 
-    monkeypatch.setattr("daylight.db.execute_values", execute_values_stub)
+    monkeypatch.setattr("glitch.db.execute_values", execute_values_stub)
 
     inserted = insert_audit_logs(conn, [_make_record()])
     assert inserted == cursor.rowcount
@@ -71,7 +71,7 @@ def test_insert_audit_logs_empty(monkeypatch):
     cursor = _Cursor()
     conn = _Conn(cursor)
     execute_values_stub = Mock()
-    monkeypatch.setattr("daylight.db.execute_values", execute_values_stub)
+    monkeypatch.setattr("glitch.db.execute_values", execute_values_stub)
     assert insert_audit_logs(conn, []) == 0
     execute_values_stub.assert_not_called()
 

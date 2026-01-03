@@ -7,9 +7,9 @@ import logging
 import os
 import time
 
-from daylight.cloudflare import CloudflareAPIError, CloudflareClient
-from daylight.config import ConfigError, load_config
-from daylight.db import (
+from glitch.cloudflare import CloudflareAPIError, CloudflareClient
+from glitch.config import ConfigError, load_config
+from glitch.db import (
     connect,
     ensure_audit_logs_table,
     ensure_checkpoint_table,
@@ -17,8 +17,8 @@ from daylight.db import (
     load_checkpoint,
     save_checkpoint,
 )
-from daylight.models import AuditLogRecord, SchemaError
-from daylight.object_storage import ObjectStorageClient, ObjectStorageError
+from glitch.models import AuditLogRecord, SchemaError
+from glitch.object_storage import ObjectStorageClient, ObjectStorageError
 
 
 logger = logging.getLogger(__name__)

@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from daylight.models import AuditLogRecord, SchemaError
+from glitch.models import AuditLogRecord, SchemaError
 
 
 def test_audit_log_mapping():

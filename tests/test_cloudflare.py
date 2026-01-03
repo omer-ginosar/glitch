@@ -4,7 +4,7 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-from daylight.cloudflare import CloudflareAPIError, CloudflareClient
+from glitch.cloudflare import CloudflareAPIError, CloudflareClient
 
 
 class _FakeResponse:
@@ -32,7 +32,7 @@ def test_iter_audit_logs_paginates(monkeypatch):
         requests.append(request)
         return _FakeResponse(payloads.pop(0))
 
-    monkeypatch.setattr("daylight.cloudflare.urlopen", urlopen_stub)
+    monkeypatch.setattr("glitch.cloudflare.urlopen", urlopen_stub)
 
     client = CloudflareClient(
         account_id="acct",
@@ -61,7 +61,7 @@ def test_error_response_raises(monkeypatch):
     def urlopen_stub(request, timeout):
         return _FakeResponse(payload)
 
-    monkeypatch.setattr("daylight.cloudflare.urlopen", urlopen_stub)
+    monkeypatch.setattr("glitch.cloudflare.urlopen", urlopen_stub)
 
     client = CloudflareClient(account_id="acct", api_token="token")
     with pytest.raises(CloudflareAPIError):
