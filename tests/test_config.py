@@ -18,6 +18,7 @@ def _set_required_env(monkeypatch):
     monkeypatch.setenv("S3_SECRET_KEY", "minio")
     monkeypatch.setenv("S3_BUCKET", "audit-logs")
     monkeypatch.setenv("S3_REGION", "us-east-1")
+    monkeypatch.setenv("S3_PREFIX", "dev/audit-logs")
 
 
 def test_load_config_success(monkeypatch):
@@ -28,6 +29,7 @@ def test_load_config_success(monkeypatch):
     config = load_config()
     assert config.cloudflare_per_page == 500
     assert config.poll_interval_seconds == 10
+    assert config.s3_prefix == "dev/audit-logs"
 
 
 def test_load_config_rejects_invalid_direction(monkeypatch):
