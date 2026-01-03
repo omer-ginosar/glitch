@@ -38,7 +38,7 @@ def _poll_once(
     before = now
 
     latest = checkpoint
-    count = 0
+    events_seen = 0
     records: list[AuditLogRecord] = []
     for event in client.iter_audit_logs(since=since, before=before):
         try:
@@ -52,24 +52,24 @@ def _poll_once(
             continue
 
         records.append(record)
-        count += 1
+        events_seen += 1
         if latest is None or record.timestamp > latest:
             latest = record.timestamp
 
     inserted = 0
     if records:
         inserted = insert_audit_logs(conn, records)
-        if latest is not None:
-            save_checkpoint(conn, latest)
+    if events_seen > 0 and latest is not None:
+        save_checkpoint(conn, latest)
 
     logger.info(
         "Fetched %s audit logs between %s and %s (inserted %s)",
-        count,
+        events_seen,
         since,
         before,
         inserted,
     )
-    return latest, count
+    return latest, events_seen
 
 
 def main() -> None:
