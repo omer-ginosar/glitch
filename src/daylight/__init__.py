@@ -1,1 +1,0 @@
-"""Daylight data pipeline package."""

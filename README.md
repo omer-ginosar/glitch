@@ -48,4 +48,4 @@ SELECT add_compression_policy('audit_logs', INTERVAL '30 days');
 ## How to run locally
 1) Copy `config.example.env` to `.env` and fill in credentials.
 2) Start local services (PostgreSQL/TimescaleDB + MinIO) via your preferred setup.
-3) Run the Python ingestor: `PYTHONPATH=src python3 -m daylight.ingest`.
+3) Run the Python ingestor: `PYTHONPATH=src python3 -m glitch.ingest`.

@@ -6,8 +6,8 @@ from typing import Iterable, Sequence
 import psycopg2
 from psycopg2.extras import Json, execute_values
 
-from daylight.config import Config
-from daylight.models import AuditLogRecord
+from glitch.config import Config
+from glitch.models import AuditLogRecord
 
 
 logger = logging.getLogger(__name__)

@@ -2,7 +2,7 @@ from datetime import timezone
 
 import pytest
 
-from daylight.config import ConfigError, load_config
+from glitch.config import ConfigError, load_config
 
 
 def _set_required_env(monkeypatch):

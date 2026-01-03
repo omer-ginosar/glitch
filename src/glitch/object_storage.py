@@ -10,8 +10,8 @@ import boto3
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from daylight.config import Config
-from daylight.models import AuditLogRecord
+from glitch.config import Config
+from glitch.models import AuditLogRecord
 
 
 logger = logging.getLogger(__name__)
