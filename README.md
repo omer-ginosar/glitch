@@ -13,10 +13,21 @@
 3) Persist the same events to S3-compatible storage as Parquet partitions.
 
 ## Configuration
-- Copy `config.example.env` to `.env` and set required values.
+- For Docker Compose, edit `.env` (or copy `.env.example` as a template).
+- For non-Docker local runs, copy `config.example.env` to `.env` and adjust host/port values.
 - Required: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `POLL_INTERVAL_SECONDS`, `PG_*`, `S3_*`.
-- Optional: `CLOUDFLARE_PER_PAGE`, `CLOUDFLARE_DIRECTION`, `CLOUDFLARE_HIDE_USER_LOGS`, `CLOUDFLARE_SINCE_SAFETY_LAG_SECONDS`, `CLOUDFLARE_REQUEST_TIMEOUT_SECONDS`, `INITIAL_CHECKPOINT`.
+- Optional: `CLOUDFLARE_PER_PAGE`, `CLOUDFLARE_DIRECTION`, `CLOUDFLARE_HIDE_USER_LOGS`, `CLOUDFLARE_SINCE_SAFETY_LAG_SECONDS`, `CLOUDFLARE_REQUEST_TIMEOUT_SECONDS`, `INITIAL_CHECKPOINT`, `S3_PREFIX`.
 - Secrets: keep tokens in `.env` (gitignored) for dev; use a secrets manager, Docker secrets, or systemd credentials in production.
+
+## Docker compose quickstart
+1) Fill in `.env` (Cloudflare token/account ID).
+2) Run `docker compose up --build`.
+3) Stop with `docker compose down`.
+4) If you need a clean DB, run `docker compose down -v` to recreate volumes.
+
+Notes:
+- Compose uses TimescaleDB and creates the MinIO bucket via a `minio-init` job.
+- `S3_PREFIX` scopes object storage paths (e.g., `dev/audit-logs`).
 
 ## Postgres/Timescale setup (optional)
 TimescaleDB is optional. If installed, enable it and convert the table:
@@ -37,4 +48,4 @@ SELECT add_compression_policy('audit_logs', INTERVAL '30 days');
 ## How to run locally
 1) Copy `config.example.env` to `.env` and fill in credentials.
 2) Start local services (PostgreSQL/TimescaleDB + MinIO) via your preferred setup.
-3) Run the Python ingestor (e.g., `python -m ingestor`).
+3) Run the Python ingestor: `PYTHONPATH=src python3 -m daylight.ingest`.

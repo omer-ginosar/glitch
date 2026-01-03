@@ -18,6 +18,7 @@ from daylight.db import (
     save_checkpoint,
 )
 from daylight.models import AuditLogRecord, SchemaError
+from daylight.object_storage import ObjectStorageClient, ObjectStorageError
 
 
 logger = logging.getLogger(__name__)
@@ -31,6 +32,7 @@ def _poll_once(
     checkpoint: datetime | None,
     poll_interval_seconds: int,
     safety_lag_seconds: int,
+    object_storage: ObjectStorageClient | None = None,
 ) -> tuple[datetime | None, int]:
     now = datetime.now(timezone.utc)
     since = checkpoint or (now - timedelta(seconds=poll_interval_seconds))
@@ -58,9 +60,13 @@ def _poll_once(
 
     inserted = 0
     if records:
-        inserted = insert_audit_logs(conn, records)
+        with conn:
+            inserted = insert_audit_logs(conn, records)
+        if object_storage is not None:
+            object_storage.write_records(records)
     if events_seen > 0 and latest is not None:
-        save_checkpoint(conn, latest)
+        with conn:
+            save_checkpoint(conn, latest)
 
     logger.info(
         "Fetched %s audit logs between %s and %s (inserted %s)",
@@ -90,6 +96,7 @@ def main() -> None:
         hide_user_logs=config.cloudflare_hide_user_logs,
         timeout_seconds=config.cloudflare_request_timeout_seconds,
     )
+    object_storage = ObjectStorageClient.from_config(config)
 
     conn = connect(config)
     with conn:
@@ -100,19 +107,21 @@ def main() -> None:
         logger.info("Using checkpoint: %s", checkpoint.isoformat())
     while True:
         try:
-            with conn:
-                new_checkpoint, _ = _poll_once(
-                    client,
-                    conn=conn,
-                    account_id=config.cloudflare_account_id,
-                    checkpoint=checkpoint,
-                    poll_interval_seconds=config.poll_interval_seconds,
-                    safety_lag_seconds=config.cloudflare_since_safety_lag_seconds,
-                )
-                if new_checkpoint is not None:
-                    checkpoint = new_checkpoint
+            new_checkpoint, _ = _poll_once(
+                client,
+                conn=conn,
+                account_id=config.cloudflare_account_id,
+                checkpoint=checkpoint,
+                poll_interval_seconds=config.poll_interval_seconds,
+                safety_lag_seconds=config.cloudflare_since_safety_lag_seconds,
+                object_storage=object_storage,
+            )
+            if new_checkpoint is not None:
+                checkpoint = new_checkpoint
         except CloudflareAPIError as exc:
             logger.error("Cloudflare API error: %s", exc)
+        except ObjectStorageError as exc:
+            logger.error("Object storage error: %s", exc)
         except Exception:
             logger.exception("Unexpected ingestion error")
 

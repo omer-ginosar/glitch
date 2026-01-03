@@ -83,6 +83,7 @@ class Config:
     s3_secret_key: str
     s3_bucket: str
     s3_region: str
+    s3_prefix: str
 
 
 def load_config() -> Config:
@@ -132,6 +133,7 @@ def load_config() -> Config:
     s3_secret_key = _get_env("S3_SECRET_KEY", required=True)
     s3_bucket = _get_env("S3_BUCKET", required=True)
     s3_region = _get_env("S3_REGION", required=True)
+    s3_prefix = _get_env("S3_PREFIX", default="") or ""
 
     return Config(
         cloudflare_api_token=cloudflare_api_token,
@@ -153,4 +155,5 @@ def load_config() -> Config:
         s3_secret_key=s3_secret_key,
         s3_bucket=s3_bucket,
         s3_region=s3_region,
+        s3_prefix=s3_prefix,
     )
