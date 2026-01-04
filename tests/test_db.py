@@ -1,7 +1,12 @@
 from datetime import datetime, timezone
 from unittest.mock import Mock
 
-from glitch.db import insert_audit_logs, load_checkpoint, save_checkpoint
+from glitch.db import (
+    insert_audit_logs,
+    insert_rehydrated_audit_logs,
+    load_checkpoint,
+    save_checkpoint,
+)
 from glitch.models import AuditLogRecord
 
 
@@ -74,6 +79,24 @@ def test_insert_audit_logs_empty(monkeypatch):
     monkeypatch.setattr("glitch.db.execute_values", execute_values_stub)
     assert insert_audit_logs(conn, []) == 0
     execute_values_stub.assert_not_called()
+
+
+def test_insert_rehydrated_audit_logs_uses_guard(monkeypatch):
+    cursor = _Cursor()
+    conn = _Conn(cursor)
+    called = {}
+
+    def execute_values_stub(cur, sql, values, page_size=500):
+        called["sql"] = sql
+        called["values"] = list(values)
+
+    monkeypatch.setattr("glitch.db.execute_values", execute_values_stub)
+
+    inserted = insert_rehydrated_audit_logs(conn, [_make_record()])
+    assert inserted == cursor.rowcount
+    assert "INSERT INTO audit_logs_rehydrated" in called["sql"]
+    assert "WHERE NOT EXISTS" in called["sql"]
+    assert len(called["values"]) == 1
 
 
 def test_checkpoint_helpers():
