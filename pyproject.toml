@@ -7,6 +7,9 @@ requires-python = ">=3.11"
 addopts = "-q"
 testpaths = ["tests"]
 pythonpath = ["src"]
+markers = [
+    "integration: integration tests that require real services",
+]
 
 [tool.flake8]
 max-line-length = 100

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import os
+import socket
 from typing import Iterable, Sequence
 
 import psycopg2
@@ -13,9 +15,22 @@ from glitch.models import AuditLogRecord
 logger = logging.getLogger(__name__)
 
 
+def _resolve_pg_host(host: str, port: int) -> str:
+    if host != "postgres":
+        return host
+    if os.path.exists("/.dockerenv"):
+        return host
+    try:
+        socket.getaddrinfo(host, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        return host
+    except socket.gaierror:
+        return "127.0.0.1"
+
+
 def connect(config: Config) -> psycopg2.extensions.connection:
+    host = _resolve_pg_host(config.pg_host, config.pg_port)
     return psycopg2.connect(
-        host=config.pg_host,
+        host=host,
         port=config.pg_port,
         dbname=config.pg_database,
         user=config.pg_user,
@@ -207,9 +222,9 @@ def insert_rehydrated_audit_logs(
             action_result,
             resource_type,
             resource_id,
-            ip_address,
-            metadata,
-            raw_event,
+            NULLIF(ip_address, '')::inet,
+            metadata::jsonb,
+            raw_event::jsonb,
             ingestion_time
         FROM (VALUES %s) AS v(
             event_id,

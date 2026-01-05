@@ -70,3 +70,11 @@ Run the test suite:
 ```bash
 python3 -m pytest
 ```
+
+Integration test (runs inside the compose network):
+
+```bash
+docker compose run --rm --no-deps -v "$PWD":/app -w /app \
+  --entrypoint python3 ingestor -m pytest -m integration \
+  tests/test_rehydrate_integration.py
+```

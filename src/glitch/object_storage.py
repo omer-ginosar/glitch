@@ -3,7 +3,10 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 import json
 import logging
+import os
+import socket
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import boto3
@@ -71,6 +74,32 @@ def _serialize_json(value: Mapping[str, Any]) -> str:
         )
     except TypeError as exc:
         raise ObjectStorageError("Failed to serialize JSON payload") from exc
+
+
+def _resolve_s3_endpoint(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if not parsed.scheme or not parsed.netloc:
+        return endpoint
+    if parsed.hostname != "minio":
+        return endpoint
+    if os.path.exists("/.dockerenv"):
+        return endpoint
+    port = parsed.port or 9000
+    try:
+        socket.getaddrinfo(parsed.hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        return endpoint
+    except socket.gaierror:
+        pass
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo += f":{parsed.password}"
+        userinfo += "@"
+    netloc = f"{userinfo}localhost"
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
 
 
 def _dedupe_records(records: Sequence[AuditLogRecord]) -> list[AuditLogRecord]:
@@ -166,6 +195,7 @@ class ObjectStorageClient:
     ) -> "ObjectStorageClient":
         if prefix is None:
             prefix = config.s3_prefix
+        endpoint = _resolve_s3_endpoint(config.s3_endpoint)
         session = boto3.session.Session(
             aws_access_key_id=config.s3_access_key,
             aws_secret_access_key=config.s3_secret_key,
@@ -173,7 +203,7 @@ class ObjectStorageClient:
         )
         s3_client = session.client(
             "s3",
-            endpoint_url=config.s3_endpoint,
+            endpoint_url=endpoint,
         )
         return cls(s3_client=s3_client, bucket=config.s3_bucket, prefix=prefix)
 
