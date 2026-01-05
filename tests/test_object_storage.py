@@ -1,4 +1,5 @@
 from datetime import datetime, timezone
+from typing import Optional
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -18,6 +19,40 @@ class _StubS3:
     def put_object(self, **kwargs):
         self.put_calls.append(kwargs)
         return {}
+
+
+class _StubBody:
+    def __init__(self, payload: bytes) -> None:
+        self._payload = payload
+
+    def read(self) -> bytes:
+        return self._payload
+
+
+class _StubS3Read:
+    def __init__(
+        self,
+        *,
+        keys_by_prefix: Optional[dict[str, list[str]]] = None,
+        objects: Optional[dict[str, bytes]] = None,
+    ) -> None:
+        self._keys_by_prefix = keys_by_prefix or {}
+        self._objects = objects or {}
+        self.list_calls: list[str] = []
+        self.get_calls: list[str] = []
+
+    def list_objects_v2(self, **kwargs):
+        prefix = kwargs["Prefix"]
+        self.list_calls.append(prefix)
+        contents = [
+            {"Key": key} for key in self._keys_by_prefix.get(prefix, [])
+        ]
+        return {"Contents": contents, "IsTruncated": False}
+
+    def get_object(self, **kwargs):
+        key = kwargs["Key"]
+        self.get_calls.append(key)
+        return {"Body": _StubBody(self._objects[key])}
 
 
 def _make_record(event_id: str, timestamp: datetime) -> AuditLogRecord:
@@ -83,3 +118,35 @@ def test_write_records_dedupes_within_poll():
     payload = stub.put_calls[0]["Body"]
     table = pq.read_table(pa.BufferReader(payload))
     assert table.num_rows == 1
+
+
+def test_list_keys_for_window_by_hour():
+    since = datetime(2025, 1, 2, 3, 30, tzinfo=timezone.utc)
+    before = datetime(2025, 1, 2, 5, 0, tzinfo=timezone.utc)
+    prefix_3 = partition_path(datetime(2025, 1, 2, 3, 0, tzinfo=timezone.utc))
+    prefix_4 = partition_path(datetime(2025, 1, 2, 4, 0, tzinfo=timezone.utc))
+    keys_by_prefix = {
+        f"{prefix_3}/": [f"{prefix_3}/part-a.parquet"],
+        f"{prefix_4}/": [f"{prefix_4}/part-b.parquet"],
+    }
+    stub = _StubS3Read(keys_by_prefix=keys_by_prefix)
+    client = ObjectStorageClient(s3_client=stub, bucket="audit-logs")
+
+    keys = client.list_keys_for_window(since=since, before=before)
+
+    assert keys == sorted([f"{prefix_3}/part-a.parquet", f"{prefix_4}/part-b.parquet"])
+    assert stub.list_calls == [f"{prefix_3}/", f"{prefix_4}/"]
+
+
+def test_read_parquet_records_from_object_storage():
+    ts = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    record = _make_record("evt-1", ts)
+    payload = records_to_parquet_bytes([record])
+    key = "year=2025/month=01/day=02/hour=03/part-test.parquet"
+    stub = _StubS3Read(objects={key: payload})
+    client = ObjectStorageClient(s3_client=stub, bucket="audit-logs")
+
+    rows = client.read_parquet_records(key)
+
+    assert len(rows) == 1
+    assert rows[0]["event_id"] == "evt-1"

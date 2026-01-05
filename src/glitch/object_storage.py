@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 import json
 import logging
+import os
+import socket
 from typing import Any, Mapping, Sequence
+from urllib.parse import urlparse, urlunparse
 from uuid import uuid4
 
 import boto3
@@ -73,6 +76,32 @@ def _serialize_json(value: Mapping[str, Any]) -> str:
         raise ObjectStorageError("Failed to serialize JSON payload") from exc
 
 
+def _resolve_s3_endpoint(endpoint: str) -> str:
+    parsed = urlparse(endpoint)
+    if not parsed.scheme or not parsed.netloc:
+        return endpoint
+    if parsed.hostname != "minio":
+        return endpoint
+    if os.path.exists("/.dockerenv"):
+        return endpoint
+    port = parsed.port or 9000
+    try:
+        socket.getaddrinfo(parsed.hostname, port, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        return endpoint
+    except socket.gaierror:
+        pass
+    userinfo = ""
+    if parsed.username:
+        userinfo = parsed.username
+        if parsed.password:
+            userinfo += f":{parsed.password}"
+        userinfo += "@"
+    netloc = f"{userinfo}localhost"
+    if parsed.port:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunparse(parsed._replace(netloc=netloc))
+
+
 def _dedupe_records(records: Sequence[AuditLogRecord]) -> list[AuditLogRecord]:
     seen: set[tuple[str, datetime]] = set()
     unique: list[AuditLogRecord] = []
@@ -97,6 +126,23 @@ def _group_records_by_hour(
         )
         grouped.setdefault(hour, []).append(record)
     return grouped
+
+
+def _iter_hours(since: datetime, before: datetime) -> list[datetime]:
+    start = _normalize_timestamp(since).replace(
+        minute=0,
+        second=0,
+        microsecond=0,
+    )
+    end = _normalize_timestamp(before)
+    if start >= end:
+        return []
+    hours: list[datetime] = []
+    current = start
+    while current < end:
+        hours.append(current)
+        current += timedelta(hours=1)
+    return hours
 
 
 def records_to_parquet_bytes(records: Sequence[AuditLogRecord]) -> bytes:
@@ -149,6 +195,7 @@ class ObjectStorageClient:
     ) -> "ObjectStorageClient":
         if prefix is None:
             prefix = config.s3_prefix
+        endpoint = _resolve_s3_endpoint(config.s3_endpoint)
         session = boto3.session.Session(
             aws_access_key_id=config.s3_access_key,
             aws_secret_access_key=config.s3_secret_key,
@@ -156,7 +203,7 @@ class ObjectStorageClient:
         )
         s3_client = session.client(
             "s3",
-            endpoint_url=config.s3_endpoint,
+            endpoint_url=endpoint,
         )
         return cls(s3_client=s3_client, bucket=config.s3_bucket, prefix=prefix)
 
@@ -192,3 +239,44 @@ class ObjectStorageClient:
             written += 1
         logger.info("Wrote %s parquet file(s) to object storage", written)
         return written
+
+    def list_keys_for_window(
+        self,
+        *,
+        since: datetime,
+        before: datetime,
+    ) -> list[str]:
+        keys: list[str] = []
+        for bucket_time in _iter_hours(since, before):
+            prefix = partition_path(bucket_time, prefix=self._prefix)
+            continuation: str | None = None
+            while True:
+                params = {
+                    "Bucket": self._bucket,
+                    "Prefix": f"{prefix}/",
+                }
+                if continuation:
+                    params["ContinuationToken"] = continuation
+                response = self._s3_client.list_objects_v2(**params)
+                for entry in response.get("Contents", []):
+                    key = entry.get("Key")
+                    if key:
+                        keys.append(key)
+                if not response.get("IsTruncated"):
+                    break
+                continuation = response.get("NextContinuationToken")
+        return sorted(set(keys))
+
+    def read_parquet_records(self, key: str) -> list[dict[str, Any]]:
+        try:
+            response = self._s3_client.get_object(
+                Bucket=self._bucket,
+                Key=key,
+            )
+            body = response["Body"].read()
+        except Exception as exc:
+            raise ObjectStorageError(
+                f"Failed to read parquet from s3://{self._bucket}/{key}"
+            ) from exc
+        table = pq.read_table(pa.BufferReader(body))
+        return table.to_pylist()
