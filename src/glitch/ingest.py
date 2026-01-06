@@ -6,6 +6,9 @@ from datetime import datetime, timedelta, timezone
 import logging
 import os
 import time
+from uuid import uuid4
+
+import psycopg2
 
 from glitch.cloudflare import CloudflareAPIError, CloudflareClient
 from glitch.config import ConfigError, load_config
@@ -32,11 +35,13 @@ def _poll_once(
     checkpoint: datetime | None,
     poll_interval_seconds: int,
     safety_lag_seconds: int,
+    job_id: str,
     object_storage: ObjectStorageClient | None = None,
 ) -> tuple[datetime | None, int]:
     now = datetime.now(timezone.utc)
-    since = checkpoint or (now - timedelta(seconds=poll_interval_seconds))
-    since = since - timedelta(seconds=safety_lag_seconds)
+    rewind = timedelta(seconds=safety_lag_seconds)
+    since_anchor = checkpoint or (now - timedelta(seconds=poll_interval_seconds))
+    since = since_anchor - rewind
     before = now
 
     latest = checkpoint
@@ -64,15 +69,21 @@ def _poll_once(
             inserted = insert_audit_logs(conn, records)
         if object_storage is not None:
             object_storage.write_records(records)
-    if events_seen > 0 and latest is not None:
+    # Keep the checkpoint trailing so late-arriving events are re-read.
+    checkpoint_floor = now - rewind
+    if latest is None or latest < checkpoint_floor:
+        latest = checkpoint_floor
+    if latest is not None:
         with conn:
             save_checkpoint(conn, latest)
 
     logger.info(
-        "Fetched %s audit logs between %s and %s (inserted %s)",
-        events_seen,
+        "Poll complete job_id=%s account_id=%s since=%s before=%s events=%s inserted=%s",
+        job_id,
+        account_id,
         since,
         before,
+        events_seen,
         inserted,
     )
     return latest, events_seen
@@ -86,6 +97,7 @@ def main() -> None:
     try:
         config = load_config()
     except ConfigError as exc:
+        logger.error("Configuration error: %s", exc)
         raise SystemExit(str(exc)) from exc
 
     client = CloudflareClient(
@@ -95,18 +107,33 @@ def main() -> None:
         direction=config.cloudflare_direction,
         hide_user_logs=config.cloudflare_hide_user_logs,
         timeout_seconds=config.cloudflare_request_timeout_seconds,
+        max_retries=config.cloudflare_max_retries,
+        backoff_seconds=config.cloudflare_backoff_seconds,
+        backoff_max_seconds=config.cloudflare_backoff_max_seconds,
     )
     object_storage = ObjectStorageClient.from_config(config)
 
     conn = connect(config)
-    with conn:
-        ensure_audit_logs_table(conn)
-        ensure_checkpoint_table(conn)
-    checkpoint = load_checkpoint(conn) or config.initial_checkpoint
+    try:
+        with conn:
+            ensure_audit_logs_table(conn)
+            ensure_checkpoint_table(conn)
+        checkpoint = load_checkpoint(conn) or config.initial_checkpoint
+    finally:
+        conn.close()
     if checkpoint is not None:
         logger.info("Using checkpoint: %s", checkpoint.isoformat())
     while True:
+        job_id = uuid4().hex
+        logger.info(
+            "Starting poll job_id=%s account_id=%s checkpoint=%s",
+            job_id,
+            config.cloudflare_account_id,
+            checkpoint.isoformat() if checkpoint else None,
+        )
+        conn = None
         try:
+            conn = connect(config)
             new_checkpoint, _ = _poll_once(
                 client,
                 conn=conn,
@@ -114,16 +141,22 @@ def main() -> None:
                 checkpoint=checkpoint,
                 poll_interval_seconds=config.poll_interval_seconds,
                 safety_lag_seconds=config.cloudflare_since_safety_lag_seconds,
+                job_id=job_id,
                 object_storage=object_storage,
             )
             if new_checkpoint is not None:
                 checkpoint = new_checkpoint
         except CloudflareAPIError as exc:
-            logger.error("Cloudflare API error: %s", exc)
+            logger.error("Cloudflare API error job_id=%s: %s", job_id, exc)
         except ObjectStorageError as exc:
-            logger.error("Object storage error: %s", exc)
+            logger.error("Object storage error job_id=%s: %s", job_id, exc)
+        except psycopg2.Error as exc:
+            logger.error("Database error job_id=%s: %s", job_id, exc)
         except Exception:
-            logger.exception("Unexpected ingestion error")
+            logger.exception("Unexpected ingestion error job_id=%s", job_id)
+        finally:
+            if conn is not None:
+                conn.close()
 
         time.sleep(config.poll_interval_seconds)
 

@@ -47,6 +47,9 @@ services:
     build: .
     env_file:
       - .env
+    environment:
+      PG_HOST: postgres
+      S3_ENDPOINT: http://minio:9000
     depends_on:
       - postgres
       - minio-init

@@ -72,7 +72,7 @@ def _ensure_audit_log_table(
                 metadata JSONB,
                 raw_event JSONB,
                 ingestion_time TIMESTAMPTZ DEFAULT NOW(),
-                PRIMARY KEY (timestamp, event_id)
+                PRIMARY KEY (timestamp, account_id, event_id)
             )
             """
         )
@@ -246,6 +246,7 @@ def insert_rehydrated_audit_logs(
             FROM audit_logs
             WHERE audit_logs.timestamp = v.timestamp
             AND audit_logs.event_id = v.event_id
+            AND audit_logs.account_id = v.account_id
         )
         ON CONFLICT DO NOTHING
     """

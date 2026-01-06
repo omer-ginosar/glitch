@@ -26,10 +26,16 @@ def test_load_config_success(monkeypatch):
     monkeypatch.setenv("POLL_INTERVAL_SECONDS", "10")
     monkeypatch.setenv("CLOUDFLARE_PER_PAGE", "500")
     monkeypatch.setenv("CLOUDFLARE_DIRECTION", "asc")
+    monkeypatch.setenv("CLOUDFLARE_MAX_RETRIES", "5")
+    monkeypatch.setenv("CLOUDFLARE_BACKOFF_SECONDS", "2")
+    monkeypatch.setenv("CLOUDFLARE_BACKOFF_MAX_SECONDS", "20")
     config = load_config()
     assert config.cloudflare_per_page == 500
     assert config.poll_interval_seconds == 10
     assert config.s3_prefix == "dev/audit-logs"
+    assert config.cloudflare_max_retries == 5
+    assert config.cloudflare_backoff_seconds == 2
+    assert config.cloudflare_backoff_max_seconds == 20
 
 
 def test_load_config_rejects_invalid_direction(monkeypatch):

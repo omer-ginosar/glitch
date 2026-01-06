@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
+from botocore.exceptions import ClientError
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -15,10 +16,30 @@ from glitch.object_storage import (
 class _StubS3:
     def __init__(self) -> None:
         self.put_calls: list[dict] = []
+        self.get_calls: list[dict] = []
 
     def put_object(self, **kwargs):
         self.put_calls.append(kwargs)
         return {}
+
+    def get_object(self, **kwargs):
+        self.get_calls.append(kwargs)
+        error = {"Error": {"Code": "NoSuchKey", "Message": "Not found"}}
+        raise ClientError(error, "GetObject")
+
+
+class _StubS3Existing(_StubS3):
+    def __init__(self, *, objects: dict[str, bytes]) -> None:
+        super().__init__()
+        self._objects = objects
+
+    def get_object(self, **kwargs):
+        self.get_calls.append(kwargs)
+        key = kwargs["Key"]
+        if key not in self._objects:
+            error = {"Error": {"Code": "NoSuchKey", "Message": "Not found"}}
+            raise ClientError(error, "GetObject")
+        return {"Body": _StubBody(self._objects[key])}
 
 
 class _StubBody:
@@ -55,11 +76,16 @@ class _StubS3Read:
         return {"Body": _StubBody(self._objects[key])}
 
 
-def _make_record(event_id: str, timestamp: datetime) -> AuditLogRecord:
+def _make_record(
+    event_id: str,
+    timestamp: datetime,
+    *,
+    account_id: str = "acct",
+) -> AuditLogRecord:
     return AuditLogRecord(
         event_id=event_id,
         timestamp=timestamp,
-        account_id="acct",
+        account_id=account_id,
         actor_email="user@example.com",
         actor_type="user",
         action_type="login",
@@ -103,8 +129,14 @@ def test_write_records_uploads_grouped_by_hour():
 
     assert written == 2
     keys = [call["Key"] for call in stub.put_calls]
-    assert "year=2025/month=01/day=02/hour=03/part-run123.parquet" in keys
-    assert "year=2025/month=01/day=02/hour=04/part-run123.parquet" in keys
+    assert (
+        "year=2025/month=01/day=02/hour=03/account_id=acct/part-00000.parquet"
+        in keys
+    )
+    assert (
+        "year=2025/month=01/day=02/hour=04/account_id=acct/part-00000.parquet"
+        in keys
+    )
 
 
 def test_write_records_dedupes_within_poll():
@@ -120,29 +152,81 @@ def test_write_records_dedupes_within_poll():
     assert table.num_rows == 1
 
 
+def test_write_records_merges_existing_file():
+    ts = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    record1 = _make_record("evt-1", ts)
+    record2 = _make_record("evt-2", ts)
+    key = (
+        f"{partition_path(ts)}/account_id=acct/part-00000.parquet"
+    )
+    existing_payload = records_to_parquet_bytes([record1])
+    stub = _StubS3Existing(objects={key: existing_payload})
+    client = ObjectStorageClient(s3_client=stub, bucket="audit-logs")
+
+    client.write_records([record1, record2], run_id="run789")
+
+    payload = stub.put_calls[0]["Body"]
+    table = pq.read_table(pa.BufferReader(payload))
+    assert table.num_rows == 2
+
+
 def test_list_keys_for_window_by_hour():
     since = datetime(2025, 1, 2, 3, 30, tzinfo=timezone.utc)
     before = datetime(2025, 1, 2, 5, 0, tzinfo=timezone.utc)
     prefix_3 = partition_path(datetime(2025, 1, 2, 3, 0, tzinfo=timezone.utc))
     prefix_4 = partition_path(datetime(2025, 1, 2, 4, 0, tzinfo=timezone.utc))
     keys_by_prefix = {
-        f"{prefix_3}/": [f"{prefix_3}/part-a.parquet"],
-        f"{prefix_4}/": [f"{prefix_4}/part-b.parquet"],
+        f"{prefix_3}/": [f"{prefix_3}/account_id=acct/part-a.parquet"],
+        f"{prefix_4}/": [f"{prefix_4}/account_id=acct/part-b.parquet"],
     }
     stub = _StubS3Read(keys_by_prefix=keys_by_prefix)
     client = ObjectStorageClient(s3_client=stub, bucket="audit-logs")
 
     keys = client.list_keys_for_window(since=since, before=before)
 
-    assert keys == sorted([f"{prefix_3}/part-a.parquet", f"{prefix_4}/part-b.parquet"])
+    assert keys == sorted(
+        [
+            f"{prefix_3}/account_id=acct/part-a.parquet",
+            f"{prefix_4}/account_id=acct/part-b.parquet",
+        ]
+    )
     assert stub.list_calls == [f"{prefix_3}/", f"{prefix_4}/"]
+
+
+def test_list_keys_for_window_by_hour_and_account():
+    since = datetime(2025, 1, 2, 3, 30, tzinfo=timezone.utc)
+    before = datetime(2025, 1, 2, 5, 0, tzinfo=timezone.utc)
+    prefix_3 = partition_path(datetime(2025, 1, 2, 3, 0, tzinfo=timezone.utc))
+    prefix_4 = partition_path(datetime(2025, 1, 2, 4, 0, tzinfo=timezone.utc))
+    acct_prefix_3 = f"{prefix_3}/account_id=acct"
+    acct_prefix_4 = f"{prefix_4}/account_id=acct"
+    keys_by_prefix = {
+        f"{acct_prefix_3}/": [f"{acct_prefix_3}/part-a.parquet"],
+        f"{acct_prefix_4}/": [f"{acct_prefix_4}/part-b.parquet"],
+    }
+    stub = _StubS3Read(keys_by_prefix=keys_by_prefix)
+    client = ObjectStorageClient(s3_client=stub, bucket="audit-logs")
+
+    keys = client.list_keys_for_window(
+        since=since,
+        before=before,
+        account_id="acct",
+    )
+
+    assert keys == sorted(
+        [
+            f"{acct_prefix_3}/part-a.parquet",
+            f"{acct_prefix_4}/part-b.parquet",
+        ]
+    )
+    assert stub.list_calls == [f"{acct_prefix_3}/", f"{acct_prefix_4}/"]
 
 
 def test_read_parquet_records_from_object_storage():
     ts = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
     record = _make_record("evt-1", ts)
     payload = records_to_parquet_bytes([record])
-    key = "year=2025/month=01/day=02/hour=03/part-test.parquet"
+    key = "year=2025/month=01/day=02/hour=03/account_id=acct/part-test.parquet"
     stub = _StubS3Read(objects={key: payload})
     client = ObjectStorageClient(s3_client=stub, bucket="audit-logs")
 

@@ -17,36 +17,35 @@ Architecture Overview
 │ (with checkpointing) │
 └──────┬──────────┬───────┘
 │ │
-│ │ (async writes)
+│ │ (sync writes)
 ▼ ▼
 ┌──────────┐ ┌────────────────┐
 │PostgreSQL│ │ MinIO/Parquet │
-│+ Timescale│ │ (partitioned) │
+│+ Timescale│ │ (time+account) │
 └──────────┘ └────────────────┘
 │
 │ (queries)
 ▼
-┌──────────┐
-│ Grafana │
-└──────────┘
+┌──────────────┐
+│ SQL/BI Tools │
+└──────────────┘
 Key Design Principles
 Simple but not naive - Production-ready without over-engineering
-Exactly-once semantics - No duplicates, no data loss
+At-least-once semantics with dedupe - No duplicates, minimize data loss
 Observable - Easy to monitor and debug
 Recoverable - Handles failures gracefully
 Maintainable - Team can support it at 3am
 
 Technology Stack & Justification
 1. Ingestion: Python with State Management
-Choice: Python 3.11+ with asyncio
+Choice: Python 3.11+ with a simple polling loop
 Why:
-✅ Native async/await for concurrent API calls and DB writes
-✅ Rich ecosystem (requests, pandas, psycopg2, s3fs)
+✅ Rich ecosystem (urllib, psycopg2, boto3, pyarrow)
 ✅ Easy to debug and modify
 ✅ Low resource footprint
 State Management:
 Store last processed timestamp in PostgreSQL
-Enables exactly-once processing
+Enables at-least-once processing with dedupe
 Survives restarts
 Alternatives Rejected:
 ❌ Apache Kafka - Overkill for single API source, adds operational complexity
@@ -91,8 +90,8 @@ year=2025/
 month=01/
 day=01/
 hour=00/
-part-0000.parquet (1 hour of data)
-part-0001.parquet
+account_id=acct/
+part-00000.parquet (1 hour of data, merged/overwritten)
 Alternatives Rejected:
 ❌ Apache Iceberg - Adds catalog complexity, overkill for our use case
 ❌ Delta Lake - Databricks-centric, Java dependency
@@ -138,14 +137,14 @@ raw_event JSONB,
 -- Pipeline metadata
 ingestion_time TIMESTAMPTZ DEFAULT NOW(),
 
-PRIMARY KEY (timestamp, event_id)
+PRIMARY KEY (timestamp, account_id, event_id)
 );
 
 -- Convert to hypertable (automatic time-based partitioning)
 SELECT create_hypertable('audit_logs', 'timestamp');
 Key Decisions:
 Hybrid schema: Structured fields for common queries + JSONB for flexibility
-Composite PK: (timestamp, event_id) enables time-based partitioning
+Composite PK: (timestamp, account_id, event_id) enables time-based partitioning
 INET type: Native IP address type for network queries
 JSONB: Full API response preserved for future analysis
 Metadata JSONB: Extracted from the event for quick filters; full event still stored
@@ -178,10 +177,11 @@ python
 "resource_type": "string",
 "resource_id": "string",
 "ip_address": "string",
-"metadata": "string", # JSON string
+"metadata_json": "string", # JSON string
+"raw_event_json": "string", # JSON string
 "ingestion_time": "timestamp[ns]"
 }
-Partitioning: year/month/day/hour for optimal query performance
+Partitioning: year/month/day/hour/account_id for optimal query performance
 
 ## Why polling (not webhooks)
 - Cloudflare Audit Logs API is designed for incremental polling by time.
@@ -190,24 +190,24 @@ Partitioning: year/month/day/hour for optimal query performance
 
 ## Ingestion loop contract
 - Inputs (env): CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID, POLL_INTERVAL_SECONDS
-- Optional inputs: CLOUDFLARE_PER_PAGE, CLOUDFLARE_DIRECTION, CLOUDFLARE_SINCE_SAFETY_LAG_SECONDS, CLOUDFLARE_HIDE_USER_LOGS, CLOUDFLARE_REQUEST_TIMEOUT_SECONDS, INITIAL_CHECKPOINT
+- Optional inputs: CLOUDFLARE_PER_PAGE, CLOUDFLARE_DIRECTION, CLOUDFLARE_SINCE_SAFETY_LAG_SECONDS, CLOUDFLARE_HIDE_USER_LOGS, CLOUDFLARE_REQUEST_TIMEOUT_SECONDS, CLOUDFLARE_MAX_RETRIES, CLOUDFLARE_BACKOFF_SECONDS, CLOUDFLARE_BACKOFF_MAX_SECONDS, INITIAL_CHECKPOINT
 - Checkpoint: stored in PostgreSQL as the latest processed `when` timestamp
 - Time window: since = checkpoint - safety lag, before = now, direction = asc
 - Pagination: request page=1..N; stop when result count < per_page (no result_info returned)
 - Ingest: map fields, store raw_event JSONB, insert with ON CONFLICT DO NOTHING
-- Commit: advance checkpoint to max event timestamp after processing events (even if inserts are deduped)
+- Commit: advance checkpoint to max(event timestamp, now - safety lag) after successful writes (even if inserts are deduped)
 - Failure: do not advance checkpoint on API or sink errors; retry on next poll
 
 ## State and checkpointing
 - The ingestor stores the last processed timestamp in PostgreSQL.
 - On each run, it queries the API for events newer than the checkpoint (with a safety lag).
 - If no checkpoint exists, start at now minus the poll interval.
-- The checkpoint is advanced only after successful writes to both sinks.
+- The checkpoint is advanced only after successful writes to both sinks, and never beyond (now - safety lag) to preserve a late-arrival window.
 
 ## Duplicate handling
-- PostgreSQL primary key on (timestamp, event_id) prevents duplicates.
-- If a poll window overlaps, duplicate inserts are ignored or upserted.
-- Parquet writes are partitioned by time; files are written once per window.
+- PostgreSQL primary key on (timestamp, account_id, event_id) prevents duplicates.
+- If a poll window overlaps, duplicate inserts are ignored.
+- Parquet writes are partitioned by time + account_id and merged into a deterministic key (overwrite) to keep idempotency.
 
 ## Retention and compression (optional)
 - TimescaleDB retention: keep 90 days of data (drop older chunks).
