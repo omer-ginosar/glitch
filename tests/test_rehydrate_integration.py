@@ -10,9 +10,12 @@ import pytest
 from glitch.config import load_config
 from glitch.db import (
     connect,
+    ensure_audit_logs_table,
     ensure_audit_logs_view,
     ensure_rehydrated_audit_logs_table,
+    insert_audit_logs,
 )
+from glitch.models import AuditLogRecord
 from glitch.object_storage import ObjectStorageClient
 from glitch import rehydrate
 
@@ -127,6 +130,91 @@ def _default_window_from_db(conn, *, hours: int) -> tuple[str, str]:
     return since_raw, before_raw
 
 
+def _try_default_window_from_db(conn, *, hours: int) -> tuple[str, str] | None:
+    with conn.cursor() as cursor:
+        cursor.execute("SELECT MAX(timestamp) FROM audit_logs")
+        row = cursor.fetchone()
+    latest = row[0] if row else None
+    if latest is None:
+        return None
+    before = latest + timedelta(hours=1)
+    since = before - timedelta(hours=hours)
+    before_raw = before.isoformat().replace("+00:00", "Z")
+    since_raw = since.isoformat().replace("+00:00", "Z")
+    return since_raw, before_raw
+
+
+def _try_default_window_from_storage(
+    client: ObjectStorageClient,
+    *,
+    hours: int,
+) -> tuple[str, str] | None:
+    keys = _list_all_keys(client)
+    latest: datetime | None = None
+    for key in keys:
+        hour = _extract_hour_from_key(key)
+        if hour and (latest is None or hour > latest):
+            latest = hour
+    if latest is None:
+        return None
+    before = latest + timedelta(hours=1)
+    since = before - timedelta(hours=hours)
+    before_raw = before.isoformat().replace("+00:00", "Z")
+    since_raw = since.isoformat().replace("+00:00", "Z")
+    return since_raw, before_raw
+
+
+def _seed_sample_data(
+    conn,
+    object_storage: ObjectStorageClient,
+    *,
+    account_id: str,
+) -> tuple[str, str]:
+    now = datetime.now(timezone.utc)
+    base = now - timedelta(hours=2)
+    records = [
+        AuditLogRecord(
+            event_id="seed-1",
+            timestamp=base + timedelta(minutes=5),
+            account_id=account_id,
+            actor_email="seed@example.com",
+            actor_type="user",
+            action_type="seed",
+            action_result="true",
+            resource_type="account",
+            resource_id=account_id,
+            ip_address="127.0.0.1",
+            metadata={"seed": True},
+            ingestion_time=now,
+            raw_event={"id": "seed-1", "seed": True},
+        ),
+        AuditLogRecord(
+            event_id="seed-2",
+            timestamp=base + timedelta(minutes=15),
+            account_id=account_id,
+            actor_email="seed@example.com",
+            actor_type="user",
+            action_type="seed",
+            action_result="true",
+            resource_type="account",
+            resource_id=account_id,
+            ip_address="127.0.0.1",
+            metadata={"seed": True},
+            ingestion_time=now,
+            raw_event={"id": "seed-2", "seed": True},
+        ),
+    ]
+    with conn:
+        ensure_audit_logs_table(conn)
+        insert_audit_logs(conn, records)
+    object_storage.write_records(records, run_id="seed")
+    since = base.replace(minute=0, second=0, microsecond=0)
+    before = since + timedelta(hours=2)
+    before_raw = before.isoformat().replace("+00:00", "Z")
+    since_raw = since.isoformat().replace("+00:00", "Z")
+    return since_raw, before_raw
+
+
 @pytest.mark.integration
 def test_rehydrate_no_duplicates_between_tables():
     _load_dotenv_if_present()
@@ -150,15 +238,24 @@ def test_rehydrate_no_duplicates_between_tables():
     account_id = config.cloudflare_account_id
     conn = connect(config)
     with conn:
+        ensure_audit_logs_table(conn)
         ensure_rehydrated_audit_logs_table(conn)
         ensure_audit_logs_view(conn)
 
-    if not since_raw or not before_raw:
-        since_raw, before_raw = _default_window_from_db(conn, hours=72)
     object_storage = ObjectStorageClient.from_config(config)
     if not since_raw or not before_raw:
-        since_raw, before_raw = _default_window_from_storage(
-            object_storage, hours=72
+        window = _try_default_window_from_db(conn, hours=72)
+        if window:
+            since_raw, before_raw = window
+    if not since_raw or not before_raw:
+        window = _try_default_window_from_storage(object_storage, hours=72)
+        if window:
+            since_raw, before_raw = window
+    if not since_raw or not before_raw:
+        since_raw, before_raw = _seed_sample_data(
+            conn,
+            object_storage,
+            account_id=account_id,
         )
     since = _parse_rfc3339(since_raw)
     before = _parse_rfc3339(before_raw)

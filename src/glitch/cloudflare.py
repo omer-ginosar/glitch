@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 import json
+import time
 from typing import Any, Dict, Iterable
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -28,7 +29,20 @@ class CloudflareClient:
     direction: str = "asc"
     hide_user_logs: bool = False
     timeout_seconds: int = 30
+    max_retries: int = 3
+    backoff_seconds: int = 1
+    backoff_max_seconds: int = 30
     base_url: str = "https://api.cloudflare.com/client/v4"
+
+    def _retry_delay(self, exc: HTTPError | URLError | None, backoff: int) -> int:
+        if isinstance(exc, HTTPError):
+            retry_after = exc.headers.get("Retry-After")
+            if retry_after:
+                try:
+                    return int(retry_after)
+                except ValueError:
+                    pass
+        return backoff
 
     def iter_audit_logs(self, *, since: datetime, before: datetime) -> Iterable[Dict[str, Any]]:
         page = 1
@@ -66,16 +80,31 @@ class CloudflareClient:
         request = Request(url)
         request.add_header("Authorization", f"Bearer {self.api_token}")
         request.add_header("Accept", "application/json")
-        try:
-            with urlopen(request, timeout=self.timeout_seconds) as response:
-                payload = json.loads(response.read().decode("utf-8"))
-        except HTTPError as exc:
-            message = exc.read().decode("utf-8", errors="ignore")
-            raise CloudflareAPIError(f"HTTP {exc.code}: {message}") from exc
-        except URLError as exc:
-            raise CloudflareAPIError(f"Request failed: {exc}") from exc
-        except json.JSONDecodeError as exc:
-            raise CloudflareAPIError("Failed to decode JSON response") from exc
+        attempt = 0
+        backoff = self.backoff_seconds
+        while True:
+            try:
+                with urlopen(request, timeout=self.timeout_seconds) as response:
+                    payload = json.loads(response.read().decode("utf-8"))
+            except HTTPError as exc:
+                message = exc.read().decode("utf-8", errors="ignore")
+                if exc.code in {429, 500, 502, 503, 504} and attempt < self.max_retries:
+                    delay = self._retry_delay(exc, backoff)
+                    time.sleep(delay)
+                    attempt += 1
+                    backoff = min(backoff * 2, self.backoff_max_seconds)
+                    continue
+                raise CloudflareAPIError(f"HTTP {exc.code}: {message}") from exc
+            except URLError as exc:
+                if attempt < self.max_retries:
+                    time.sleep(backoff)
+                    attempt += 1
+                    backoff = min(backoff * 2, self.backoff_max_seconds)
+                    continue
+                raise CloudflareAPIError(f"Request failed: {exc}") from exc
+            except json.JSONDecodeError as exc:
+                raise CloudflareAPIError("Failed to decode JSON response") from exc
+            break
 
         if not isinstance(payload, dict):
             raise CloudflareAPIError("Unexpected response payload type")

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Optional
 
+from botocore.exceptions import ClientError
 import pyarrow as pa
 import pyarrow.parquet as pq
 
@@ -15,10 +16,30 @@ from glitch.object_storage import (
 class _StubS3:
     def __init__(self) -> None:
         self.put_calls: list[dict] = []
+        self.get_calls: list[dict] = []
 
     def put_object(self, **kwargs):
         self.put_calls.append(kwargs)
         return {}
+
+    def get_object(self, **kwargs):
+        self.get_calls.append(kwargs)
+        error = {"Error": {"Code": "NoSuchKey", "Message": "Not found"}}
+        raise ClientError(error, "GetObject")
+
+
+class _StubS3Existing(_StubS3):
+    def __init__(self, *, objects: dict[str, bytes]) -> None:
+        super().__init__()
+        self._objects = objects
+
+    def get_object(self, **kwargs):
+        self.get_calls.append(kwargs)
+        key = kwargs["Key"]
+        if key not in self._objects:
+            error = {"Error": {"Code": "NoSuchKey", "Message": "Not found"}}
+            raise ClientError(error, "GetObject")
+        return {"Body": _StubBody(self._objects[key])}
 
 
 class _StubBody:
@@ -109,11 +130,11 @@ def test_write_records_uploads_grouped_by_hour():
     assert written == 2
     keys = [call["Key"] for call in stub.put_calls]
     assert (
-        "year=2025/month=01/day=02/hour=03/account_id=acct/part-run123.parquet"
+        "year=2025/month=01/day=02/hour=03/account_id=acct/part-00000.parquet"
         in keys
     )
     assert (
-        "year=2025/month=01/day=02/hour=04/account_id=acct/part-run123.parquet"
+        "year=2025/month=01/day=02/hour=04/account_id=acct/part-00000.parquet"
         in keys
     )
 
@@ -129,6 +150,24 @@ def test_write_records_dedupes_within_poll():
     payload = stub.put_calls[0]["Body"]
     table = pq.read_table(pa.BufferReader(payload))
     assert table.num_rows == 1
+
+
+def test_write_records_merges_existing_file():
+    ts = datetime(2025, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    record1 = _make_record("evt-1", ts)
+    record2 = _make_record("evt-2", ts)
+    key = (
+        f"{partition_path(ts)}/account_id=acct/part-00000.parquet"
+    )
+    existing_payload = records_to_parquet_bytes([record1])
+    stub = _StubS3Existing(objects={key: existing_payload})
+    client = ObjectStorageClient(s3_client=stub, bucket="audit-logs")
+
+    client.write_records([record1, record2], run_id="run789")
+
+    payload = stub.put_calls[0]["Body"]
+    table = pq.read_table(pa.BufferReader(payload))
+    assert table.num_rows == 2
 
 
 def test_list_keys_for_window_by_hour():

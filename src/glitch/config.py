@@ -71,6 +71,9 @@ class Config:
     cloudflare_hide_user_logs: bool
     cloudflare_since_safety_lag_seconds: int
     cloudflare_request_timeout_seconds: int
+    cloudflare_max_retries: int
+    cloudflare_backoff_seconds: int
+    cloudflare_backoff_max_seconds: int
     poll_interval_seconds: int
     initial_checkpoint: datetime | None
     pg_host: str
@@ -112,6 +115,21 @@ def load_config() -> Config:
         _get_env("CLOUDFLARE_REQUEST_TIMEOUT_SECONDS", default="30"),
         minimum=1,
     )
+    cloudflare_max_retries = _parse_int(
+        "CLOUDFLARE_MAX_RETRIES",
+        _get_env("CLOUDFLARE_MAX_RETRIES", default="3"),
+        minimum=0,
+    )
+    cloudflare_backoff_seconds = _parse_int(
+        "CLOUDFLARE_BACKOFF_SECONDS",
+        _get_env("CLOUDFLARE_BACKOFF_SECONDS", default="1"),
+        minimum=0,
+    )
+    cloudflare_backoff_max_seconds = _parse_int(
+        "CLOUDFLARE_BACKOFF_MAX_SECONDS",
+        _get_env("CLOUDFLARE_BACKOFF_MAX_SECONDS", default="30"),
+        minimum=0,
+    )
     poll_interval_seconds = _parse_int(
         "POLL_INTERVAL_SECONDS",
         _get_env("POLL_INTERVAL_SECONDS", default="60"),
@@ -143,6 +161,9 @@ def load_config() -> Config:
         cloudflare_hide_user_logs=cloudflare_hide_user_logs,
         cloudflare_since_safety_lag_seconds=cloudflare_since_safety_lag_seconds,
         cloudflare_request_timeout_seconds=cloudflare_request_timeout_seconds,
+        cloudflare_max_retries=cloudflare_max_retries,
+        cloudflare_backoff_seconds=cloudflare_backoff_seconds,
+        cloudflare_backoff_max_seconds=cloudflare_backoff_max_seconds,
         poll_interval_seconds=poll_interval_seconds,
         initial_checkpoint=initial_checkpoint,
         pg_host=pg_host,

@@ -1,22 +1,23 @@
 # Cloudflare Audit Logs Pipeline (Home Assignment)
 
 - Polls Cloudflare Audit Logs API continuously (every N seconds).
-- Ingests events with checkpointing to avoid gaps across restarts.
+- Ingests events with checkpointing and a safety lag window to reduce gaps across restarts.
 - Writes near-real-time events to an analytics DB (PostgreSQL + TimescaleDB).
-- Writes batch Parquet files to S3-compatible storage (e.g., MinIO).
+- Writes Parquet files to S3-compatible storage (e.g., MinIO), merged/overwritten per hour+account.
+- At-least-once delivery with dedupe in Postgres and idempotent object storage writes.
 - Keeps a minimal, debuggable Python ingestion loop.
 - Preserves raw event payloads for flexible querying.
 
 ## Data flow (high level)
 1) Poll Cloudflare Audit Logs API for new events since last checkpoint.
 2) Persist events into PostgreSQL/TimescaleDB for fast queries.
-3) Persist the same events to S3-compatible storage as Parquet partitions.
+3) Persist the same events to S3-compatible storage as Parquet partitions (time+account).
 
 ## Configuration
 - For Docker Compose, edit `.env` (or copy `.env.example` as a template).
 - For non-Docker local runs, copy `config.example.env` to `.env` and adjust host/port values.
 - Required: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `POLL_INTERVAL_SECONDS`, `PG_*`, `S3_*`.
-- Optional: `CLOUDFLARE_PER_PAGE`, `CLOUDFLARE_DIRECTION`, `CLOUDFLARE_HIDE_USER_LOGS`, `CLOUDFLARE_SINCE_SAFETY_LAG_SECONDS`, `CLOUDFLARE_REQUEST_TIMEOUT_SECONDS`, `INITIAL_CHECKPOINT`, `S3_PREFIX`.
+- Optional: `CLOUDFLARE_PER_PAGE`, `CLOUDFLARE_DIRECTION`, `CLOUDFLARE_HIDE_USER_LOGS`, `CLOUDFLARE_SINCE_SAFETY_LAG_SECONDS`, `CLOUDFLARE_REQUEST_TIMEOUT_SECONDS`, `CLOUDFLARE_MAX_RETRIES`, `CLOUDFLARE_BACKOFF_SECONDS`, `CLOUDFLARE_BACKOFF_MAX_SECONDS`, `INITIAL_CHECKPOINT`, `S3_PREFIX`.
 - Secrets: keep tokens in `.env` (gitignored) for dev; use a secrets manager, Docker secrets, or systemd credentials in production.
 
 ## Setup on a new machine
@@ -36,6 +37,7 @@
 Notes:
 - Compose uses TimescaleDB and creates the MinIO bucket via a `minio-init` job.
 - `S3_PREFIX` scopes object storage paths (e.g., `dev/audit-logs`).
+- For host-run tests, `.env` should point to `localhost` for Postgres/MinIO; the ingestor container overrides these to reach `postgres`/`minio` inside Compose.
 
 ## Postgres/Timescale setup (optional)
 TimescaleDB is optional. If installed, enable it and convert the table:
