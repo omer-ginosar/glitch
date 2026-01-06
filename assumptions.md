@@ -14,8 +14,7 @@
 
 ## Future upgrades if assumptions change
 
-- If multiple accounts are onboarded, shard ingestion by account_id across workers with
-  per-account checkpoints and token-level rate limiting/backoff.
+- If multiple accounts are onboarded, deploy multiple workers (e.g., AWS Fargate or equivalent managed container service) and shard ingestion by account_id with per-account checkpoints and token-level rate limiting/backoff.
 - If per-account throughput grows, use account_id + time partitioning
   (multidimensional hypertables) to reduce hot chunks and improve query pruning.
 - If a single Postgres instance saturates even with parallel workers, reduce retention and compression thesholds to move more hot data to the cold tier.
