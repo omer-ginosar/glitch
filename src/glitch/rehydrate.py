@@ -6,7 +6,10 @@ import argparse
 from collections.abc import Mapping
 from datetime import datetime, timezone
 import json
+import os
+import logging
 from typing import Any
+from uuid import uuid4
 
 from glitch.config import ConfigError, load_config
 from glitch.db import (
@@ -20,6 +23,8 @@ from glitch.object_storage import ObjectStorageClient, ObjectStorageError
 
 
 BATCH_SIZE = 500
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_rfc3339(value: str) -> datetime:
@@ -96,6 +101,10 @@ def _record_from_row(
 
 
 def main() -> None:
+    logging.basicConfig(
+        level=os.getenv("LOG_LEVEL", "INFO"),
+        format="%(asctime)s %(levelname)s %(message)s",
+    )
     parser = argparse.ArgumentParser(
         description="Rehydrate audit logs from object storage."
     )
@@ -112,8 +121,17 @@ def main() -> None:
     try:
         config = load_config()
     except ConfigError as exc:
+        logger.error("Configuration error: %s", exc)
         raise SystemExit(str(exc)) from exc
     account_id = args.account_id or config.cloudflare_account_id
+    job_id = uuid4().hex
+    logger.info(
+        "Starting rehydrate job_id=%s account_id=%s since=%s before=%s",
+        job_id,
+        account_id,
+        since.isoformat(),
+        before.isoformat(),
+    )
 
     object_storage = ObjectStorageClient.from_config(config)
     conn = connect(config)
@@ -128,13 +146,34 @@ def main() -> None:
             account_id=account_id,
         )
     except Exception as exc:
+        logger.error(
+            "Failed to list object storage keys job_id=%s account_id=%s: %s",
+            job_id,
+            account_id,
+            exc,
+        )
         raise SystemExit(str(exc)) from exc
+    logger.info(
+        "Found %s object storage file(s) job_id=%s account_id=%s",
+        len(keys),
+        job_id,
+        account_id,
+    )
 
     batch: list[AuditLogRecord] = []
+    total_rows = 0
+    total_inserted = 0
     for key in keys:
         try:
             rows = object_storage.read_parquet_records(key)
         except ObjectStorageError as exc:
+            logger.error(
+                "Failed to read parquet job_id=%s account_id=%s key=%s: %s",
+                job_id,
+                account_id,
+                key,
+                exc,
+            )
             raise SystemExit(str(exc)) from exc
         for row in rows:
             if not isinstance(row, Mapping):
@@ -149,14 +188,22 @@ def main() -> None:
             if record is None:
                 continue
             batch.append(record)
+            total_rows += 1
             if len(batch) >= BATCH_SIZE:
                 with conn:
-                    insert_rehydrated_audit_logs(conn, batch)
+                    total_inserted += insert_rehydrated_audit_logs(conn, batch)
                 batch.clear()
 
     if batch:
         with conn:
-            insert_rehydrated_audit_logs(conn, batch)
+            total_inserted += insert_rehydrated_audit_logs(conn, batch)
+    logger.info(
+        "Completed rehydrate job_id=%s account_id=%s rows_read=%s rows_inserted=%s",
+        job_id,
+        account_id,
+        total_rows,
+        total_inserted,
+    )
 
 
 if __name__ == "__main__":

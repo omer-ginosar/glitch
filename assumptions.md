@@ -8,6 +8,7 @@
 - No schema evolution handling beyond storing raw_event JSONB.
 - Minimal security: credentials are passed via environment variables.
 - Error handling is basic (log and retry on next poll).
+- INFO+ logs from the ingestor/rehydrator are captured from stdout/stderr by the monitoring stack.
 - Parquet files are written per-hour; no compaction or catalog.
 - TimescaleDB is optional; retention/compression policies may be enabled in DB.
 

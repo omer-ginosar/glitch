@@ -6,6 +6,7 @@ from datetime import datetime, timedelta, timezone
 import logging
 import os
 import time
+from uuid import uuid4
 
 from glitch.cloudflare import CloudflareAPIError, CloudflareClient
 from glitch.config import ConfigError, load_config
@@ -32,6 +33,7 @@ def _poll_once(
     checkpoint: datetime | None,
     poll_interval_seconds: int,
     safety_lag_seconds: int,
+    job_id: str,
     object_storage: ObjectStorageClient | None = None,
 ) -> tuple[datetime | None, int]:
     now = datetime.now(timezone.utc)
@@ -69,10 +71,12 @@ def _poll_once(
             save_checkpoint(conn, latest)
 
     logger.info(
-        "Fetched %s audit logs between %s and %s (inserted %s)",
-        events_seen,
+        "Poll complete job_id=%s account_id=%s since=%s before=%s events=%s inserted=%s",
+        job_id,
+        account_id,
         since,
         before,
+        events_seen,
         inserted,
     )
     return latest, events_seen
@@ -86,6 +90,7 @@ def main() -> None:
     try:
         config = load_config()
     except ConfigError as exc:
+        logger.error("Configuration error: %s", exc)
         raise SystemExit(str(exc)) from exc
 
     client = CloudflareClient(
@@ -106,6 +111,13 @@ def main() -> None:
     if checkpoint is not None:
         logger.info("Using checkpoint: %s", checkpoint.isoformat())
     while True:
+        job_id = uuid4().hex
+        logger.info(
+            "Starting poll job_id=%s account_id=%s checkpoint=%s",
+            job_id,
+            config.cloudflare_account_id,
+            checkpoint.isoformat() if checkpoint else None,
+        )
         try:
             new_checkpoint, _ = _poll_once(
                 client,
@@ -114,16 +126,17 @@ def main() -> None:
                 checkpoint=checkpoint,
                 poll_interval_seconds=config.poll_interval_seconds,
                 safety_lag_seconds=config.cloudflare_since_safety_lag_seconds,
+                job_id=job_id,
                 object_storage=object_storage,
             )
             if new_checkpoint is not None:
                 checkpoint = new_checkpoint
         except CloudflareAPIError as exc:
-            logger.error("Cloudflare API error: %s", exc)
+            logger.error("Cloudflare API error job_id=%s: %s", job_id, exc)
         except ObjectStorageError as exc:
-            logger.error("Object storage error: %s", exc)
+            logger.error("Object storage error job_id=%s: %s", job_id, exc)
         except Exception:
-            logger.exception("Unexpected ingestion error")
+            logger.exception("Unexpected ingestion error job_id=%s", job_id)
 
         time.sleep(config.poll_interval_seconds)
 

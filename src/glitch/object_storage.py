@@ -224,6 +224,14 @@ class ObjectStorageClient:
         run_id = run_id or uuid4().hex
         deduped = _dedupe_records(records)
         grouped = _group_records_by_hour_and_account(deduped)
+        account_count = len({record.account_id for record in deduped})
+        logger.info(
+            "Writing parquet job_id=%s records=%s account_count=%s hours=%s",
+            run_id,
+            len(deduped),
+            account_count,
+            len(grouped),
+        )
         written = 0
         for bucket_time, account_id in sorted(grouped.keys()):
             hour_records = sorted(
@@ -248,7 +256,11 @@ class ObjectStorageClient:
                     f"Failed to upload parquet to s3://{self._bucket}/{key}"
                 ) from exc
             written += 1
-        logger.info("Wrote %s parquet file(s) to object storage", written)
+        logger.info(
+            "Wrote %s parquet file(s) to object storage job_id=%s",
+            written,
+            run_id,
+        )
         return written
 
     def list_keys_for_window(
