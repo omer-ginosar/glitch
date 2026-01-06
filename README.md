@@ -26,10 +26,11 @@ A small, production-minded pipeline that continuously ingests Cloudflare audit l
 - `tests/`: unit tests + integration rehydrate test.
 - `architecture.md`: design decisions and data model.
 - `assumptions.md`: scope assumptions and future upgrades.
-- `config.example.env`: configuration template.
+- `.env.example`: Docker Compose configuration template.
+- `config.example.env`: local (host-run) configuration template.
 
 ## 🔧 Configuration
-- For Docker Compose, edit `.env` (or copy `.env.example`).
+- For Docker Compose, copy `.env.example` to `.env` and edit values.
 - For non-Docker local runs, copy `config.example.env` to `.env` and adjust host/port values.
 - Required: `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`, `POLL_INTERVAL_SECONDS`, `PG_*`, `S3_*`.
 - Optional: `CLOUDFLARE_PER_PAGE`, `CLOUDFLARE_DIRECTION`, `CLOUDFLARE_HIDE_USER_LOGS`,
@@ -45,7 +46,7 @@ overrides `PG_HOST`/`S3_ENDPOINT` to reach `postgres`/`minio` inside Compose.
    - Python 3.11+
    - Docker + Docker Compose
 2) Create config:
-   - `cp config.example.env .env`
+   - `cp .env.example .env`
 3) Fill `.env` with:
    - `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`
    - `PG_*`, `S3_*`, `POLL_INTERVAL_SECONDS`

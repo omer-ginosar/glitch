@@ -18,7 +18,8 @@
 - If multiple accounts are onboarded, deploy multiple workers (e.g., AWS Fargate or equivalent managed container service) and shard ingestion by account_id with per-account checkpoints and token-level rate limiting/backoff.
 - If per-account throughput grows, use account_id + time partitioning
   (multidimensional hypertables) to reduce hot chunks and improve query pruning.
-- If a single Postgres instance saturates even with parallel workers, reduce retention and compression thesholds to move more hot data to the cold tier. its are consistently hit, implement adaptive backoff with jitter and add per-account throttling.
+- If a single Postgres instance saturates even with parallel workers, reduce retention and compression thresholds to move more hot data to the cold tier.
+- If API limits are consistently hit, implement adaptive backoff with jitter and add per-account throttling.
 - If scale/limits change, add adaptive backoff with jitter, per-account throttling/parallelism, and basic metrics/health checks to keep up with API volume and rate limits.
 - If storage/rehydration grows, add compaction to avoid small-file explosion, stream row groups or add pushdown filters to reduce memory, and consider Parquet struct/map types.
 - If schema evolution becomes frequent, use Alembic for versioned, additive migrations with backfills and expand JSONB indexing.
