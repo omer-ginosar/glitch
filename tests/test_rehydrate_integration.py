@@ -147,6 +147,7 @@ def test_rehydrate_no_duplicates_between_tables():
     finally:
         if injected_token:
             os.environ.pop("CLOUDFLARE_API_TOKEN", None)
+    account_id = config.cloudflare_account_id
     conn = connect(config)
     with conn:
         ensure_rehydrated_audit_logs_table(conn)
@@ -163,7 +164,11 @@ def test_rehydrate_no_duplicates_between_tables():
     before = _parse_rfc3339(before_raw)
     if since >= before:
         pytest.fail("Invalid REHYDRATE_SINCE/REHYDRATE_BEFORE window")
-    keys = object_storage.list_keys_for_window(since=since, before=before)
+    keys = object_storage.list_keys_for_window(
+        since=since,
+        before=before,
+        account_id=account_id,
+    )
     assert keys, "No object storage files found for the window"
 
     total_rows = 0
@@ -181,7 +186,7 @@ def test_rehydrate_no_duplicates_between_tables():
         with conn.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT event_id, timestamp
+                SELECT event_id, timestamp, account_id
                 FROM audit_logs
                 WHERE timestamp >= %s AND timestamp < %s
                 ORDER BY timestamp ASC
@@ -192,15 +197,16 @@ def test_rehydrate_no_duplicates_between_tables():
             keep = cursor.fetchone()
             if keep is None:
                 pytest.fail("No audit_logs rows found in the window")
-            keep_event_id, keep_timestamp = keep
+            keep_event_id, keep_timestamp, keep_account_id = keep
 
             cursor.execute(
                 """
                 SELECT COUNT(*)
                 FROM audit_logs
                 WHERE timestamp >= %s AND timestamp < %s
+                AND account_id = %s
                 """,
-                (since, before),
+                (since, before, keep_account_id),
             )
             original_count = cursor.fetchone()[0]
             assert original_count >= 2, "Need at least 2 rows in audit_logs to test rehydration"
@@ -209,13 +215,29 @@ def test_rehydrate_no_duplicates_between_tables():
                 """
                 DELETE FROM audit_logs
                 WHERE timestamp >= %s AND timestamp < %s
-                AND NOT (timestamp = %s AND event_id = %s)
+                AND account_id = %s
+                AND NOT (timestamp = %s AND event_id = %s AND account_id = %s)
                 """,
-                (since, before, keep_timestamp, keep_event_id),
+                (
+                    since,
+                    before,
+                    keep_account_id,
+                    keep_timestamp,
+                    keep_event_id,
+                    keep_account_id,
+                ),
             )
 
     argv = sys.argv[:]
-    sys.argv = ["glitch.rehydrate", "--since", since_raw, "--before", before_raw]
+    sys.argv = [
+        "glitch.rehydrate",
+        "--since",
+        since_raw,
+        "--before",
+        before_raw,
+        "--account-id",
+        account_id,
+    ]
     try:
         rehydrate.main()
     finally:
@@ -227,9 +249,9 @@ def test_rehydrate_no_duplicates_between_tables():
                 """
                 SELECT COUNT(*)
                 FROM audit_logs
-                WHERE timestamp = %s AND event_id = %s
+                WHERE timestamp = %s AND event_id = %s AND account_id = %s
                 """,
-                (keep_timestamp, keep_event_id),
+                (keep_timestamp, keep_event_id, keep_account_id),
             )
             assert cursor.fetchone()[0] == 1
 
@@ -237,9 +259,9 @@ def test_rehydrate_no_duplicates_between_tables():
                 """
                 SELECT COUNT(*)
                 FROM audit_logs_rehydrated
-                WHERE timestamp = %s AND event_id = %s
+                WHERE timestamp = %s AND event_id = %s AND account_id = %s
                 """,
-                (keep_timestamp, keep_event_id),
+                (keep_timestamp, keep_event_id, keep_account_id),
             )
             assert cursor.fetchone()[0] == 0
 
@@ -248,10 +270,13 @@ def test_rehydrate_no_duplicates_between_tables():
                 SELECT COUNT(*)
                 FROM audit_logs a
                 JOIN audit_logs_rehydrated r
-                ON a.timestamp = r.timestamp AND a.event_id = r.event_id
+                ON a.timestamp = r.timestamp
+                AND a.event_id = r.event_id
+                AND a.account_id = r.account_id
                 WHERE a.timestamp >= %s AND a.timestamp < %s
+                AND a.account_id = %s
                 """,
-                (since, before),
+                (since, before, keep_account_id),
             )
             assert cursor.fetchone()[0] == 0
 
@@ -260,7 +285,8 @@ def test_rehydrate_no_duplicates_between_tables():
                 SELECT COUNT(*)
                 FROM audit_logs_rehydrated
                 WHERE timestamp >= %s AND timestamp < %s
+                AND account_id = %s
                 """,
-                (since, before),
+                (since, before, keep_account_id),
             )
             assert cursor.fetchone()[0] >= 1

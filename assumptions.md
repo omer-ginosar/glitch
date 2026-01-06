@@ -10,3 +10,14 @@
 - Error handling is basic (log and retry on next poll).
 - Parquet files are written per-hour; no compaction or catalog.
 - TimescaleDB is optional; retention/compression policies may be enabled in DB.
+
+## Future upgrades if assumptions change
+
+- If multiple accounts are onboarded, shard ingestion by account_id across workers with
+  per-account checkpoints and token-level rate limiting/backoff.
+- If per-account throughput grows, use account_id + time partitioning
+  (multidimensional hypertables) to reduce hot chunks and improve query pruning.
+- If a single Postgres instance saturates even with parallel workers, reduce retention and compression thesholds to move more hot data to the cold tier.
+- If schema evolution becomes frequent, use Alembic for versioned, additive migrations with backfills and expand JSONB indexing.
+- If low-latency analytics become critical, introduce rollups/continuous aggregates or a serving layer.
+- If query composition grows complex, consider SQLAlchemy Core or an ORM for read paths.

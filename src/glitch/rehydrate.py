@@ -66,6 +66,7 @@ def _record_from_row(
     since: datetime,
     before: datetime,
     default_account_id: str,
+    expected_account_id: str | None = None,
 ) -> AuditLogRecord | None:
     event_id = row.get("event_id")
     if not event_id:
@@ -74,10 +75,13 @@ def _record_from_row(
     if timestamp is None or timestamp < since or timestamp >= before:
         return None
     ingestion_time = _normalize_timestamp(row.get("ingestion_time")) or timestamp
+    account_id = row.get("account_id") or default_account_id
+    if expected_account_id and account_id != expected_account_id:
+        return None
     return AuditLogRecord(
         event_id=str(event_id),
         timestamp=timestamp,
-        account_id=row.get("account_id") or default_account_id,
+        account_id=account_id,
         actor_email=row.get("actor_email"),
         actor_type=row.get("actor_type"),
         action_type=row.get("action_type"),
@@ -97,6 +101,7 @@ def main() -> None:
     )
     parser.add_argument("--since", required=True, help="RFC3339 start time")
     parser.add_argument("--before", required=True, help="RFC3339 end time")
+    parser.add_argument("--account-id", help="Cloudflare account ID")
     args = parser.parse_args()
 
     since = _parse_rfc3339(args.since)
@@ -108,6 +113,7 @@ def main() -> None:
         config = load_config()
     except ConfigError as exc:
         raise SystemExit(str(exc)) from exc
+    account_id = args.account_id or config.cloudflare_account_id
 
     object_storage = ObjectStorageClient.from_config(config)
     conn = connect(config)
@@ -116,7 +122,11 @@ def main() -> None:
         ensure_audit_logs_view(conn)
 
     try:
-        keys = object_storage.list_keys_for_window(since=since, before=before)
+        keys = object_storage.list_keys_for_window(
+            since=since,
+            before=before,
+            account_id=account_id,
+        )
     except Exception as exc:
         raise SystemExit(str(exc)) from exc
 
@@ -133,7 +143,8 @@ def main() -> None:
                 row,
                 since=since,
                 before=before,
-                default_account_id=config.cloudflare_account_id,
+                default_account_id=account_id,
+                expected_account_id=account_id,
             )
             if record is None:
                 continue

@@ -103,10 +103,10 @@ def _resolve_s3_endpoint(endpoint: str) -> str:
 
 
 def _dedupe_records(records: Sequence[AuditLogRecord]) -> list[AuditLogRecord]:
-    seen: set[tuple[str, datetime]] = set()
+    seen: set[tuple[str, str, datetime]] = set()
     unique: list[AuditLogRecord] = []
     for record in records:
-        key = (record.event_id, record.timestamp)
+        key = (record.account_id, record.event_id, record.timestamp)
         if key in seen:
             continue
         seen.add(key)
@@ -114,17 +114,17 @@ def _dedupe_records(records: Sequence[AuditLogRecord]) -> list[AuditLogRecord]:
     return unique
 
 
-def _group_records_by_hour(
+def _group_records_by_hour_and_account(
     records: Sequence[AuditLogRecord],
-) -> dict[datetime, list[AuditLogRecord]]:
-    grouped: dict[datetime, list[AuditLogRecord]] = {}
+) -> dict[tuple[datetime, str], list[AuditLogRecord]]:
+    grouped: dict[tuple[datetime, str], list[AuditLogRecord]] = {}
     for record in records:
         hour = _normalize_timestamp(record.timestamp).replace(
             minute=0,
             second=0,
             microsecond=0,
         )
-        grouped.setdefault(hour, []).append(record)
+        grouped.setdefault((hour, record.account_id), []).append(record)
     return grouped
 
 
@@ -173,9 +173,15 @@ def records_to_parquet_bytes(records: Sequence[AuditLogRecord]) -> bytes:
     return sink.getvalue().to_pybytes()
 
 
-def _build_object_key(bucket_time: datetime, run_id: str, *, prefix: str = "") -> str:
+def _build_object_key(
+    bucket_time: datetime,
+    run_id: str,
+    *,
+    prefix: str = "",
+    account_id: str,
+) -> str:
     path = partition_path(bucket_time, prefix=prefix)
-    return f"{path}/part-{run_id}.parquet"
+    return f"{path}/account_id={account_id}/part-{run_id}.parquet"
 
 
 class ObjectStorageClient:
@@ -217,15 +223,20 @@ class ObjectStorageClient:
             return 0
         run_id = run_id or uuid4().hex
         deduped = _dedupe_records(records)
-        grouped = _group_records_by_hour(deduped)
+        grouped = _group_records_by_hour_and_account(deduped)
         written = 0
-        for bucket_time in sorted(grouped.keys()):
+        for bucket_time, account_id in sorted(grouped.keys()):
             hour_records = sorted(
-                grouped[bucket_time],
+                grouped[(bucket_time, account_id)],
                 key=lambda record: (record.timestamp, record.event_id),
             )
             payload = records_to_parquet_bytes(hour_records)
-            key = _build_object_key(bucket_time, run_id, prefix=self._prefix)
+            key = _build_object_key(
+                bucket_time,
+                run_id,
+                prefix=self._prefix,
+                account_id=account_id,
+            )
             try:
                 self._s3_client.put_object(
                     Bucket=self._bucket,
@@ -245,10 +256,13 @@ class ObjectStorageClient:
         *,
         since: datetime,
         before: datetime,
+        account_id: str | None = None,
     ) -> list[str]:
         keys: list[str] = []
         for bucket_time in _iter_hours(since, before):
             prefix = partition_path(bucket_time, prefix=self._prefix)
+            if account_id:
+                prefix = f"{prefix}/account_id={account_id}"
             continuation: str | None = None
             while True:
                 params = {
